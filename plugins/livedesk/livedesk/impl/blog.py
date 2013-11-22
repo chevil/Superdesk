@@ -34,7 +34,9 @@ from superdesk.source.api.source import ISourceService
 from ally.container import wire
 from superdesk.post.api.post import QPostWithPublished
 from superdesk.post.meta.post import PostMapped
-from mysql.connector.errors import IntegrityError
+from ally.api.criteria import AsBoolean
+from security.rbac.api.rbac import QRole
+from superdesk.security.api.user_rbac import IUserRbacService
 
 # --------------------------------------------------------------------
 
@@ -48,6 +50,10 @@ class BlogServiceAlchemy(EntityCRUDServiceAlchemy, IBlogService):
     '''
     Implementation for @see: IBlogService
     '''
+    roleService = IUserRbacService; wire.entity('roleService')
+    # The role service used to get info about user assigned roles and rights
+    admin_role = 'Administrator'
+    
     def __init__(self):
         '''
         Construct the blog service.
@@ -104,19 +110,32 @@ class BlogServiceAlchemy(EntityCRUDServiceAlchemy, IBlogService):
 
     def _buildQuery(self, languageId=None, userId=None, q=None):
         '''
-        Builds the general query for blogs.
-        '''
+Builds the general query for blogs.
+'''
         sql = self.session().query(BlogMapped)
+        
         if languageId: sql = sql.filter(BlogMapped.Language == languageId)
         if userId:
-            userFilter = (BlogMapped.Creator == userId) | exists().where((CollaboratorMapped.User == userId) \
-                                         & (BlogCollaboratorMapped.blogCollaboratorId == CollaboratorMapped.Id) \
-                                         & (BlogCollaboratorMapped.Blog == BlogMapped.Id))
-            sql = sql.filter(userFilter)
+            #TODO: change it for the new version of Ally-Py, where it is a complete implementation of security
+            qRole = QRole()
+            qRole.name = self.admin_role
+            isAdmin = len(self.roleService.getRoles(userId, q=qRole))
+            if not isAdmin:
+                userFilter = (BlogMapped.Creator == userId) | exists().where((CollaboratorMapped.User == userId) \
+                                             & (BlogCollaboratorMapped.blogCollaboratorId == CollaboratorMapped.Id) \
+                                             & (BlogCollaboratorMapped.Blog == BlogMapped.Id))
+                sql = sql.filter(userFilter)
 
         if q:
             assert isinstance(q, QBlog), 'Invalid query %s' % q
             sql = buildQuery(sql, q, BlogMapped)
+
+            if (QBlog.isOpen in q) and (AsBoolean.value in q.isOpen):
+                if q.isOpen.value:
+                    sql = sql.filter(BlogMapped.ClosedOn == None)
+                else:
+                    sql = sql.filter(BlogMapped.ClosedOn != None)
+
         return sql
 
 # --------------------------------------------------------------------
